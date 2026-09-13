@@ -50,27 +50,29 @@ function _build_newnew_reference_config(plan, results_dir::String)
 end
 
 # --------- Run each of the 8 schedulers (corrected/ and non_corrected/), one at a time ---------
-function main_newnew()
-    ic_df = CSV.read(NEW_IC_PATH, DataFrame)
+function main_newnew(; input_dir=NEWNEW_FIRING_PLAN_DIR, output_dir=NEWNEW_RESULTS_DIR,
+    variants=NEWNEW_VARIANTS, ic_path=NEW_IC_PATH,
+    schedule_pattern=r"^(.+)_schedule\.csv$", plan_loader=_load_new_firing_plan)
+    ic_df = CSV.read(ic_path, DataFrame)
     ic_df.satellite = Int.(round.(ic_df.satellite))
 
-    for variant in NEWNEW_VARIANTS
-        variant_dir = joinpath(NEWNEW_FIRING_PLAN_DIR, variant)
+    for variant in variants
+        variant_dir = joinpath(input_dir, variant)
         schedule_paths = sort(filter(
-            f -> occursin(r"^.+_schedule\.csv$", basename(f)),
+            f -> occursin(schedule_pattern, basename(f)),
             readdir(variant_dir; join=true),
         ))
-        isempty(schedule_paths) && error("No *_schedule.csv files found in $variant_dir.")
+        isempty(schedule_paths) && error("No matching schedule CSV files found in $variant_dir.")
 
         for sched_path in schedule_paths
-            name = match(r"^(.+)_schedule\.csv$", basename(sched_path)).captures[1]
+            name = match(schedule_pattern, basename(sched_path)).captures[1]
             println("\n=============== [$variant] Scheduler: $name ===============")
 
-            plan = _load_new_firing_plan(ic_df, sched_path)
+            plan = plan_loader(ic_df, sched_path)
             println(@sprintf("Loaded %d satellites (1 target + %d helpers), %d schedule intervals, mission time %.1f s (%.2f hours).",
                 plan.n_helpers + 1, plan.n_helpers, length(plan.schedule_starts), plan.mission_time_s, plan.mission_time_s / 3600.0))
 
-            results_dir = joinpath(NEWNEW_RESULTS_DIR, variant, name)
+            results_dir = joinpath(output_dir, variant, name)
             args, laser_model = _build_new_firing_plan_config(plan, results_dir)
 
             impulse_tracker = LaserImpulseTracker()
@@ -112,6 +114,7 @@ function main_newnew()
             # --------- plots (same layout as run_nihal_firing_plan_v1.jl) ---------
             flat_sol    = _make_flat_sol_from_feather(feather_df, N)
             plot_result = (flat_sol=flat_sol, impulse_tracker=impulse_tracker, mu=mu)
+            # Multi-spacecraft simulation is not necessarily a campaign. Independent Monte Carlo runs can be distributed as separate jobs. Spacecraft interacting through laser links, mutual forces, or shared resources need coordinated state and event handling. For ORACLE, this distinction is especially important: a physically coupled constellation is not merely an ensemble of independent simulations.
             plot_opts   = OracleCase2Options(
                 helpers=plan.n_helpers, mass_kg=MASS_KG, eta=ETA, beta=BETA,
                 magnification=MAGNIFICATION, laser_power_w=LASER_POWER_W, laser_range_km=Inf,
