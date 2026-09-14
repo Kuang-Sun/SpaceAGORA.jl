@@ -339,6 +339,12 @@ end
 Stable extension hook for [`AbstractControlEffectorModel`](@ref)
 implementations that consume propellant. Effectors that do not model propellant
 consumption should return `0.0`.
+
+Return the spacecraft mass derivative in kilograms per second, negative for
+propellant consumption. `u` is the individual spacecraft state, `p` holds the
+simulation parameters, `i` is the spacecraft index, and `t` is elapsed time in
+seconds. The `BaseThrusterModel` method returns `-norm(force) / (Isp * g0)`
+during an active valid burn and `0.0` otherwise.
 """
 function calcControlMassFlowRate(controlModel::AbstractControlEffectorModel, u::AbstractVector, p::ODEParams, i::Int64, t::Float64)::Float64
     return 0.0
@@ -367,10 +373,19 @@ end
 
 """
     calcControlForceTorque(model, u, p, i, t)
+    calcControlForceTorque(model::BaseThrusterModel, u, p, i, t)
 
 Stable extension hook for [`AbstractControlEffectorModel`](@ref)
 implementations that contribute force and torque terms to the spacecraft
 dynamics.
+
+For `BaseThrusterModel`, `u` is the individual spacecraft state, `p` holds the
+simulation parameters, `i` is the spacecraft index, and `t` is elapsed time in
+seconds. Return a tuple of 3D force and torque vectors in newtons and
+newton-meters. During the effective burn window, thrust is parallel or
+antiparallel to the inertial velocity according to the configured direction;
+torque is zero. Outside the burn window or for invalid thrust inputs, both
+vectors are zero.
 """
 function calcControlForceTorque(controlModel::BaseThrusterModel, u::AbstractVector, p::ODEParams, i::Int64, t::Float64)::Tuple{SVector{3, Float64}, SVector{3, Float64}}
     # Calculate the control force and torque based on the thruster model and current state
@@ -425,10 +440,19 @@ end
 
 """
     calcControlEffect!(model, u, p, t, i)
+    calcControlEffect!(model::BaseThrusterModel, u::ComponentVector, p, t, i)
 
 Stable extension hook for [`AbstractControlEffectorModel`](@ref)
 implementations that update control-related shared state during the simulation
 loop.
+
+For `BaseThrusterModel`, `u` is the full simulation state (`u.sc[i]` selects
+the spacecraft), `p` holds the simulation parameters, and `t` is elapsed time
+in seconds. This method schedules eligible maneuvers around apoapsis, updates
+the model's burn times and the stored burn plan, preserves an active burn's
+schedule, and clears completed burns. It does not directly compute or store
+force and torque; [`calcControlForceTorque`](@ref) evaluates the scheduled
+thrust during dynamics evaluation.
 """
 function calcControlEffect!(controlModel::BaseThrusterModel, u::ComponentVector, p::ODEParams, t::Float64, i::Int64)
     # Calculate the control effect (force and torque) based on the control model and current state, and store it in the shared buffers for use in the dynamics calculations

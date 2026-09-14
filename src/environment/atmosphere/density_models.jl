@@ -87,6 +87,11 @@ Multi-layer analytic density-model constructor for bounded no-GRAM studies that
 need more shape than a single scale height. The model assumes zero winds and
 constant temperature and uses the nearest configured layer to extrapolate
 outside the advisory validity band.
+
+`h_breaks_m` defines contiguous layer boundaries in meters. For `N` layers,
+provide `N + 1` strictly increasing breakpoints, `N` reference densities, and
+`N` positive scale heights. Optional `h_refs` supplies `N` reference altitudes;
+by default, each reference altitude is the lower boundary of its layer.
 """
 struct PiecewiseExponentialAtmosphereModel <: AbstractDensityModel
     h_breaks_m::Vector{Float64}
@@ -275,8 +280,10 @@ end
 Initialize or refresh the CelesTrak space-weather dataset used by
 `NRLMSISE00AtmosphereModel(use_space_indices=true)`.
 
-Call this before long runs if you want any dataset download or refresh to
-happen before the first atmosphere evaluation.
+This is optional: the dataset is initialized lazily on the first evaluation
+that needs it. Call this before long runs or Monte Carlo campaigns to perform
+initialization before the solver starts. Once initialized, subsequent calls
+do nothing unless `force_download=true` requests a refresh.
 """
 function init_nrlmsise_space_indices!(; force_download::Bool=false)
     lock(_NRLMSISE00_SPACE_INDICES_LOCK) do
@@ -294,14 +301,22 @@ end
 """
     NRLMSISE00AtmosphereModel(; f107a=150.0, f107=150.0, ap=4.0, index_provider=nothing, use_space_indices=false, space_indices_force_download=false, include_anomalous_oxygen=true, valid_min_altitude_m=0.0, valid_max_altitude_m=1000e3)
 
-NRLMSISE-00 atmosphere-model constructor for runs that need empirical
-thermospheric density without GRAM. Use fixed `f107a`, `f107`, and `ap` values
-or provide `index_provider`, a callable that returns `(f107a, f107, ap)` for a
-requested instant. Set `use_space_indices=true` to use the built-in
-CelesTrak-backed F10.7/Ap dataset path, optionally prewarmed through
-[`init_nrlmsise_space_indices!`](@ref). The standard NRLMSISE-00 validity band
-is approximately `0 m` to `1000 km`; the validity fields document that range
-but do not clamp evaluation.
+NRLMSISE-00 atmosphere model with either fixed geophysical indices or a callable
+index provider, without requiring GRAM assets.
+
+`f107a`, `f107`, and `ap` set the explicit solar and geomagnetic inputs. If
+`index_provider` is not `nothing`, it is called at evaluation time and must
+return either `(f107a, f107, ap)` or a named tuple with `f107a`, `f107`, and
+`ap`. The provider may accept either `(instant)` or `(instant, h, lat, lon)`.
+
+Set `use_space_indices=true` to install the built-in CelesTrak-backed provider
+for F10.7 and Ap data instead of a custom provider. That path lazily initializes
+the dataset on first use that needs it, or you can prewarm it with
+[`init_nrlmsise_space_indices!`](@ref).
+
+`valid_min_altitude_m` and `valid_max_altitude_m` document the standard model
+validity range, approximately `0 m` to `1000 km`; evaluation is not clamped
+to that range.
 """
 struct NRLMSISE00AtmosphereModel{A, P} <: AbstractDensityModel
     f107a::Float64
