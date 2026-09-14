@@ -333,6 +333,13 @@ end
     return nothing
 end
 
+"""
+    calcControlMassFlowRate(model, u, p, i, t)
+
+Stable extension hook for [`AbstractControlEffectorModel`](@ref)
+implementations that consume propellant. Effectors that do not model propellant
+consumption should return `0.0`.
+"""
 function calcControlMassFlowRate(controlModel::AbstractControlEffectorModel, u::AbstractVector, p::ODEParams, i::Int64, t::Float64)::Float64
     return 0.0
 end
@@ -359,16 +366,11 @@ function calcReactionWheelTorque(controlModel, u::AbstractVector, p::ODEParams, 
 end
 
 """
-calcControlForceTorque(controlModel::BaseThrusterModel, x::AbstractVector, p::ODEParams, i::Int64, t::Float64)::Tuple{SVector{3, Float64}, SVector{3, Float64}}
+    calcControlForceTorque(model, u, p, i, t)
 
-Calculate the control force and torque based on the thruster model and current state, called in the dynamics loop to get the current thruster force
-- `controlModel`: The thruster model containing thrust magnitudes, directions, burn times, and specific impulses for each thruster
-- `x`: The current state vector of the spacecraft
-- `p`: The ODE parameters containing simulation configuration and other relevant data
-- `i`: The index of the spacecraft for which to calculate the control force/torque
-- `t`: The current time in the simulation
-
-Returns a tuple containing the total control force and torque as 3D vectors
+Stable extension hook for [`AbstractControlEffectorModel`](@ref)
+implementations that contribute force and torque terms to the spacecraft
+dynamics.
 """
 function calcControlForceTorque(controlModel::BaseThrusterModel, u::AbstractVector, p::ODEParams, i::Int64, t::Float64)::Tuple{SVector{3, Float64}, SVector{3, Float64}}
     # Calculate the control force and torque based on the thruster model and current state
@@ -422,18 +424,11 @@ function calcControlMassFlowRate(controlModel::BaseThrusterModel, u::AbstractVec
 end
 
 """
-calcControlEffect!(controlModel::BaseThrusterModel, u::ComponentVector, p::ODEParams, t::Float64, i::Int64)
-Calculate the control effect (force and torque) based on the control model and current state, and store it in the shared buffers for use in the dynamics calculations
+    calcControlEffect!(model, u, p, t, i)
 
-Args
-- `controlModel`: The thruster model containing thrust magnitudes, directions, burn times, and specific impulses for each thruster
-- `u`: The current state vector of the spacecraft as a ComponentVector
-- `p`: The ODE parameters containing simulation configuration and other relevant data
-- `t`: The current time in the simulation
-- `i`: The index of the spacecraft for which to calculate the control effect
-
-Returns
-- Updates the control force and torque in the shared buffers for the specified spacecraft index
+Stable extension hook for [`AbstractControlEffectorModel`](@ref)
+implementations that update control-related shared state during the simulation
+loop.
 """
 function calcControlEffect!(controlModel::BaseThrusterModel, u::ComponentVector, p::ODEParams, t::Float64, i::Int64)
     # Calculate the control effect (force and torque) based on the control model and current state, and store it in the shared buffers for use in the dynamics calculations
