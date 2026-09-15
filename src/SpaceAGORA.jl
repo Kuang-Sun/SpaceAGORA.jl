@@ -24,7 +24,7 @@ using .ParallelProfiles: reset_outer_route_state!, outer_route_signature, outer_
 using .ParallelProfiles: default_outer_route, outer_route_candidates, select_outer_route!, record_outer_route_feedback!
 
 # 2.2. Parallel Process
-using .ParallelProcess: ProcessPool, campaign_process_pool, ensure_process_workers!, shutdown_process_pool!
+using .ParallelProcess: ProcessPool, campaign_process_pool, ensure_process_workers!, shutdown_process_pool!, adopt_process_workers!
 
 ## 2.3. Simulation Engine
 using .SimulationEngine: ParallelConfig, SolverConfig, RuntimePolicyConfig, ArtifactConfig, SimulationEngineConfig
@@ -38,6 +38,7 @@ using .SimulationCampaigns: run_constellation_ensemble
 using .SimulationCampaigns: campaign_route_features, campaign_outer_route_state
 
 ## 2.5. Simulation Model
+using .SimulationModel: StateAnchor, get_state_anchor_callback
 using .SimulationModel.AbstractTypes: AbstractForceTorqueModel, AbstractPlanet, AbstractDensityModel
 using .SimulationModel.AbstractTypes: AbstractControlEffectorModel, AbstractEphemeridesModel
 using .SimulationModel.AbstractTypes: AbstractThermalModel, AbstractThrusterModel, AbstractGuidanceModel
@@ -82,7 +83,6 @@ using .SimulationModel: AerobrakingEnergyDepletionConfig, AerobrakingEnergyDeple
 using .SimulationModel: AerobrakingEnergyDepletionGuidanceModel, AerobrakingEnergyDepletionControlModel
 using .SimulationModel: SolarPanelAngleOfAttackControlModel
 using .SimulationModel: ApoapsisTargetPeriapsisRaiseGuidanceModel
-using .SimulationModel: constellation_struct, build_constellation, activate_link!, deactivate_link!, reset_active_links!
 
 ## 2.6. Telemetry Verification
 using .TelemetryVerification: VerificationRequest, VerificationResult
@@ -129,6 +129,8 @@ using .SpaceAGORACLI: check_assets, render_asset_report, run_cli
 @doc (@doc SimulationModel.AerobrakingEnergyDepletionGuidanceModel) AerobrakingEnergyDepletionGuidanceModel
 @doc (@doc SimulationModel.AerobrakingEnergyDepletionControlModel) AerobrakingEnergyDepletionControlModel
 @doc (@doc SimulationModel.SolarPanelAngleOfAttackControlModel) SolarPanelAngleOfAttackControlModel
+@doc (@doc SimulationModel.StateAnchor) StateAnchor
+@doc (@doc SimulationModel.get_state_anchor_callback) get_state_anchor_callback
 @doc (@doc SimulationModel.AbstractTypes.AbstractForceTorqueModel) AbstractForceTorqueModel
 @doc (@doc SimulationModel.AbstractTypes.AbstractPlanet) AbstractPlanet
 @doc (@doc SimulationModel.AbstractTypes.AbstractDensityModel) AbstractDensityModel
@@ -261,6 +263,7 @@ using .SpaceAGORACLI: check_assets, render_asset_report, run_cli
 @doc (@doc ParallelProcess.campaign_process_pool) campaign_process_pool
 @doc (@doc ParallelProcess.ensure_process_workers!) ensure_process_workers!
 @doc (@doc ParallelProcess.shutdown_process_pool!) shutdown_process_pool!
+@doc (@doc ParallelProcess.adopt_process_workers!) adopt_process_workers!
 
 # 3.7. Telemetry Verification
 @doc (@doc TelemetryVerification.VerificationRequest) VerificationRequest
@@ -283,13 +286,14 @@ export parse_parallel_profile, parallel_profile_name, profile_config, profile_en
 export OuterRouteFeatures, OuterRouteTuning, OuterRouteState
 export reset_outer_route_state!, outer_route_signature, outer_route_stats_snapshot
 export default_outer_route, outer_route_candidates, select_outer_route!, record_outer_route_feedback!
-export ProcessPool, campaign_process_pool, ensure_process_workers!, shutdown_process_pool!
+export ProcessPool, campaign_process_pool, ensure_process_workers!, shutdown_process_pool!, adopt_process_workers!
 export ParallelConfig, SolverConfig, RuntimePolicyConfig, ArtifactConfig, SimulationEngineConfig
 export simulation_engine_config_from_env
 export prewarm_nbody_ephemeris_cache, load_nbody_ephemeris_cache!
 export MonteCarloSpec, MonteCarloSampleResult, MonteCarloResult, run_monte_carlo
 export run_constellation_ensemble
 export campaign_route_features, campaign_outer_route_state
+export StateAnchor, get_state_anchor_callback
 export AbstractForceTorqueModel, AbstractPlanet, AbstractDensityModel, AbstractControlEffectorModel
 export AbstractEphemeridesModel, AbstractThermalModel, AbstractThrusterModel, AbstractGuidanceModel
 export StateSample, PlanetFrameSample, AtmosphereSample, SolarEphemerisSample
@@ -320,12 +324,7 @@ export NoAtmosphereModel, ExponentialAtmosphereModel, PiecewiseExponentialAtmosp
 export NRLMSISE00AtmosphereModel, init_nrlmsise_space_indices!
 export SimpleEphemeridesModel
 export make_no_gram_planet, make_no_gram_density_model, make_no_gram_environment
-export constellation_struct, build_constellation, activate_link!, deactivate_link!, reset_active_links!
 export calcForceTorque, wrench, environment_requirements, solver_partition
-export LaserThrusterParams, LaserCommunicationParams, LaserPowerTransferParams
-export LaserLinkModel, build_LaserLinkModel, laser_link_scheduler_callback
-export choose_active_links!
-export LaserImpulseTracker, laser_impulse_callback
 export gravity_backbone_structure, gravity_backbone_acceleration_ii
 export gravity_backbone_kick_structure, gravity_backbone_kick_acceleration_ii
 export getDensity, getDensityBatch!
@@ -343,5 +342,35 @@ export AssetCheckItem, AssetCheckReport, check_assets, render_asset_report, run_
 ## 5. Precompile Workload
 using PrecompileTools: @compile_workload, @setup_workload
 include(joinpath(@__DIR__, "precompile_workload.jl"))
+
+# The Monte Carlo dispatchers compile on their first campaign in a process --
+# the job channel, the feeders and local consumers of the mixed dispatcher, the
+# sample wrapper, the steady-cost estimator. Measured on the paper harness
+# (L12, independent_1sat_1hr, 64 samples): the runner's first pool campaign
+# cost 3.1-3.2 s against 1.8-2.2 s for the static pool path's own cold start
+# on both machines, and 0.2-0.6 s warm. A production process pays that once;
+# the harness pays it on the first repeat of every point. Exercised with a
+# trivial sample so the generic machinery is in the pkgimage; the user's sample
+# closure itself still specialises on first call. The body lives in
+# `SimulationCampaigns._warm_campaign_dispatchers` so the test suite can run
+# the same code at run time.
+@compile_workload begin
+	SimulationCampaigns._warm_campaign_dispatchers()
+end
+
+## 6. Runtime Initialization
+# Runtime wiring that must not be baked into the precompiled image: these Refs
+# hold closures over EnvironmentModels functions, so assigning them at include
+# time would serialize a closure from an earlier world age. __init__ runs on
+# every load of the cached image, which is what this needs.
+function __init__()
+	try
+		SimulationModel.SimulationCallbacks._install_density_service_hooks!()
+	catch err
+		@warn "Could not install distributed density service hooks; the service will be unavailable." exception=(err, catch_backtrace())
+	end
+	return nothing
+end
+
 
 end # module SpaceAGORA
